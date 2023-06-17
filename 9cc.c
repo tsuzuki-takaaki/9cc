@@ -25,10 +25,27 @@ struct Token {
 // current token as global
 Token *token;
 
+// input string sequence as global
+char *user_input;
+
 // error handling function
 void error(char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
+  vfprintf(stderr, fmt, ap);
+  fprintf(stderr, "\n");
+  exit(1);
+}
+
+void error_at(char *loc, char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+
+  // pos = pointer headed to current pos - pointer headed to the beginning(user_input is string(array) and point the beginning)
+  int pos = loc - user_input;
+  fprintf(stderr, "%s\n", user_input);
+  fprintf(stderr, "%*s", pos, " ");
+  fprintf(stderr, "^ ");
   vfprintf(stderr, fmt, ap);
   fprintf(stderr, "\n");
   exit(1);
@@ -47,7 +64,7 @@ bool consume(char op) {
 // else return panic
 void expect(char op) {
   if (token->kind != TK_RESERVED || token->str[0] != op)
-    error("Not '%c'", op);
+    error_at(token->str, "expected '%c'", op);
   token = token->next;
 }
 
@@ -55,7 +72,7 @@ void expect(char op) {
 // else return panic
 int expect_number() {
   if (token->kind != TK_NUM)
-    error("Not integer");
+    error_at(token->str, "expected a number");
   int val = token->val;
   // read next token as global
   token = token->next;
@@ -81,7 +98,8 @@ Token *new_token(TokenKind kind, Token *cur, char *str) {
 
 // tokenize input argument p
 // @return Token
-Token *tokenize(char *p) {
+Token *tokenize() {
+  char *p = user_input;
   // create root token
   Token head;
   head.next = NULL;
@@ -115,7 +133,7 @@ Token *tokenize(char *p) {
       cur->val = strtol(p, &p, 10);
       continue;
     }
-    error("Can not tokenize");
+    error_at(p, "expected a number");
   }
 
   new_token(TK_EOF, cur, p);
@@ -129,7 +147,8 @@ int main(int argc, char **argv) {
   }
 
   // create sequece of tokens
-  token = tokenize(argv[1]);
+  user_input = argv[1];
+  token = tokenize();
   
   // prepare of output assembly
   printf(".intel_syntax noprefix\n");

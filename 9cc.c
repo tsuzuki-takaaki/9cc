@@ -23,6 +23,7 @@ struct Token {
   Token *next; // next token
   int val; // val when token is TK_EOF
   char *str;
+  int len;
 };
 
 // current token as global
@@ -54,20 +55,22 @@ void error_at(char *loc, char *fmt, ...) {
   exit(1);
 }
 
+// For reading token sequence and advance(this function is not for structuring token sequence)
 // if next token is expected, read next token end return true.
 // else return false.
-bool consume(char op) {
-  if (token->kind != TK_RESERVED || token->str[0] != op)
+bool consume(char *op) {
+  if (token->kind != TK_RESERVED || strlen(op) != token->len || memcmp(token->str, op, token->len))
     return false;
   token = token->next;
   return true;
 }
 
+// For reading token sequence and advance(this function is not for structuring token sequence)
 // if next token is expected, read next token.
 // else return panic
-void expect(char op) {
-  if (token->kind != TK_RESERVED || token->str[0] != op)
-    error_at(token->str, "expected '%c'", op);
+void expect(char *op) {
+  if (token->kind != TK_RESERVED || strlen(op) != token->len || memcmp(token->str, op, token->len))
+    error_at(token->str, "expected \"%s\"", op);
   token = token->next;
 }
 
@@ -90,13 +93,19 @@ bool at_eof() {
 // @cur parent tokne
 // @str next token(like integer token after calcuation operator)
 // @return Token
-Token *new_token(TokenKind kind, Token *cur, char *str) {
+Token *new_token(TokenKind kind, Token *cur, char *str, int len) {
   Token *tok = calloc(1, sizeof(Token));
   tok->kind = kind;
   tok->str = str;
+  tok->len = len;
   // parent token's next is this new token
   cur->next = tok;
   return tok;
+}
+
+// compare p and q by strlen's string from beginning
+bool startswith(char *p, char *q) {
+  return memcmp(p, q, strlen(q)) == 0;
 }
 
 // tokenize input argument p
@@ -108,6 +117,7 @@ Token *tokenize() {
   head.next = NULL;
   Token *cur = &head;
 
+  // check each strings by advancing p's pointer
   while (*p) {
     // when next character is white space, read next character(advance the pointer)
     if (isspace(*p)) {
@@ -115,9 +125,16 @@ Token *tokenize() {
       continue;
     }
 
-    // for Punctuator
-    if (strchr("+-*/()", *p)) {
-      cur = new_token(TK_RESERVED, cur, p++);
+    // for Multi-letter Punctuator
+    if (startswith(p, "==") || startswith(p, "!=") || startswith(p, "<=") || startswith(p, ">=")) {
+      cur = new_token(TK_RESERVED, cur, p, 2);
+      p += 2;
+      continue;
+    }
+
+    // for Single-letter Punctuator
+    if (strchr("+-*/()<>", *p)) {
+      cur = new_token(TK_RESERVED, cur, p++, 1);
       continue;
     }
 
@@ -134,14 +151,16 @@ Token *tokenize() {
     // }
     // for Integer Literal
     if (isdigit(*p)) {
-      cur = new_token(TK_NUM, cur, p);
+      cur = new_token(TK_NUM, cur, p, 0);
+      char *q = p;
       cur->val = strtol(p, &p, 10);
+      cur->len = p - q;
       continue;
     }
     error_at(p, "invalid token");
   }
 
-  new_token(TK_EOF, cur, p);
+  new_token(TK_EOF, cur, p, 0);
   return head.next;
 }
 
@@ -155,6 +174,10 @@ typedef enum {
   ND_SUB, // - 
   ND_MUL, // *
   ND_DIV, // /
+  ND_EQ,  // ==
+  ND_NE,  // !=
+  ND_LT,  // <
+  ND_LE,  // <=
   ND_NUM, // int
 } NodeKind;
 
@@ -191,19 +214,57 @@ Node *new_num(int val) {
 
 // prototype
 Node *expr();
+Node *equality();
+Node *relational();
+Node *add();
 Node *mul();
 Node *unary();
 Node *primary();
 
-// expr = mul ("+" mul | "-" mul)*
+// expr = equality
 Node *expr() {
+  return equality();
+}
+
+// equality = relational ("==" relational | "!=" relational)*
+Node *equality() {
+  Node *node = relational();
+
+  for(;;) {
+    if (consume("=="))
+      node = new_binary(ND_EQ, node, relational());
+    else if (consume("!="))
+      node = new_binary(ND_NE, node, relational());
+    else
+      return node;
+  }
+}
+
+Node *relational() {
+  Node *node = add();
+  for(;;) {
+    if (consume("<"))
+      node = new_binary(ND_LT, node, add());
+    else if (consume("<="))
+      node = new_binary(ND_LE, node, add());
+    else if (consume(">"))
+      node = new_binary(ND_LT, add(), node);
+    else if (consume(">="))
+      node = new_binary(ND_LE, add(), node);
+    else
+      return node;
+  }
+}
+
+// add = mul ("+" mul | "-" mul)*
+Node *add() {
   Node *node = mul();
   
   for(;;) {
     // consume: when token matches with argument, advance token
-    if (consume('+'))
+    if (consume("+"))
       node = new_binary(ND_ADD, node, mul());
-    else if (consume('-'))
+    else if (consume("-"))
       node = new_binary(ND_SUB, node, mul());
     else
       return node;
@@ -215,9 +276,9 @@ Node *mul() {
   Node *node = unary(); 
 
   for (;;) {
-    if (consume('*'))
+    if (consume("*"))
       node = new_binary(ND_MUL, node, unary());
-    else if (consume('/'))
+    else if (consume("/"))
       node = new_binary(ND_DIV, node, unary());
     else
       return node;
@@ -226,9 +287,9 @@ Node *mul() {
 
 // unary = ("+" | "-")? primary
 Node *unary() {
-  if (consume('+'))
+  if (consume("+"))
     return unary();
-  if (consume('-'))
+  if (consume("-"))
     return new_binary(ND_SUB, new_num(0), unary());
   return primary();
 }
@@ -236,9 +297,9 @@ Node *unary() {
 // primary = num | "(" expr ")"
 Node *primary() {
   // when token is (, next is maybe expr
-  if (consume('(')) {
+  if (consume("(")) {
     Node *node = expr();
-    expect(')');
+    expect(")");
     return node;
   }
 
@@ -275,6 +336,26 @@ void gen(Node *node) {
   case ND_DIV:
     printf("  cqo\n");
     printf("  idiv rdi\n");
+    break;
+  case ND_EQ:
+    printf("  cmp rax, rdi\n");  // when rdi and rax is same(rdi - rax == 0), ZF is set 1.
+    printf("  sete al\n");       // when ZF is 1, al is 1
+    printf("  movzb rax, al\n");
+    break;
+  case ND_NE:
+    printf("  cmp rax, rdi\n");
+    printf("  setne al\n");
+    printf("  movzb rax, al\n");
+    break;
+  case ND_LT:
+    printf("  cmp rax, rdi\n");
+    printf("  setl al\n");
+    printf("  movzb rax, al\n");
+    break;
+  case ND_LE:
+    printf("  cmp rax, rdi\n");
+    printf("  setle al\n");
+    printf("  movzb rax, al\n");
     break;
   }
 
